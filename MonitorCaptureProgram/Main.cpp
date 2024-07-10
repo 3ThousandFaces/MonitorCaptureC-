@@ -7,12 +7,12 @@
 #include <vector>
 
 // Function declarations
-void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps);
+void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps, int captureDurationSec);
 HMONITOR MonitorFromIndex(int monitorIndex);
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData);
 
 // Function to capture each monitor and save as bitmap
-void CaptureAllMonitors(const char* baseFilename, int fps) {
+void CaptureAllMonitors(const char* baseFilename, int fps, int captureDurationSec) {
     std::vector<HMONITOR> monitors;
     EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&monitors));
 
@@ -20,12 +20,12 @@ void CaptureAllMonitors(const char* baseFilename, int fps) {
         char filename[256];
         sprintf_s(filename, "%s_%zu.bmp", baseFilename, i);
 
-        CaptureMonitor(filename, monitors[i], fps);
+        CaptureMonitor(filename, monitors[i], fps, captureDurationSec);
     }
 }
 
-// Function to capture a specific monitor and save as bitmap
-void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps) {
+// Function to capture a specific monitor and save as bitmap for a specified duration
+void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps, int captureDurationSec) {
     // Get monitor info
     MONITORINFOEX monitorInfo;
     monitorInfo.cbSize = sizeof(MONITORINFOEX);
@@ -38,7 +38,10 @@ void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps) {
     // Calculate time interval between frames
     auto frameDuration = std::chrono::milliseconds(1000 / fps);
 
-    while (true) {
+    // Calculate end time based on capture duration
+    auto endTime = std::chrono::steady_clock::now() + std::chrono::seconds(captureDurationSec);
+
+    while (std::chrono::steady_clock::now() < endTime) {
         auto startTime = std::chrono::steady_clock::now();
 
         HDC hMonitorDC = CreateDC(TEXT("DISPLAY"), monitorInfo.szDevice, NULL, NULL); // Get DC for monitor
@@ -71,7 +74,7 @@ void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps) {
         memset(&bmfHeader, 0, sizeof(BITMAPFILEHEADER));
         bmfHeader.bfType = 0x4D42; // 'BM'
         bmfHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-        bmfHeader.bfSize = bmfHeader.bfOffBits + (captureWidth * captureHeight * 3); // 3 bytes per pixel (24-bit)
+        bmfHeader.bfSize = bmfHeader.bfOffBits + (captureWidth * captureHeight * 3); // Total size of the file
 
         std::ofstream file(filename, std::ios::out | std::ios::binary);
         file.write(reinterpret_cast<const char*>(&bmfHeader), sizeof(BITMAPFILEHEADER));
@@ -90,9 +93,8 @@ void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps) {
         DeleteObject(hBitmap);
 
         // Calculate time for next frame
-        auto endTime = std::chrono::steady_clock::now();
-        auto elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-        auto sleepTime = frameDuration - elapsedTime;
+        auto elapsedTime = std::chrono::steady_clock::now() - startTime;
+        auto sleepTime = frameDuration - std::chrono::duration_cast<std::chrono::milliseconds>(elapsedTime);
 
         if (sleepTime > std::chrono::milliseconds(0)) {
             std::this_thread::sleep_for(sleepTime);
@@ -120,7 +122,8 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 }
 
 int main() {
-    // Capture all monitors at 60 fps
-    CaptureAllMonitors("monitor_capture", 60);
+    // Capture all monitors for 10 seconds at 60 fps
+    int captureDurationSec = 10;
+    CaptureAllMonitors("monitor_capture", 60, captureDurationSec);
     return 0;
 }
