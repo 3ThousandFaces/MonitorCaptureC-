@@ -1,129 +1,105 @@
-#include <windows.h>
-#include <wingdi.h>
+#include <Windows.h>
 #include <iostream>
 #include <fstream>
-#include <chrono> // For timing
-#include <thread> // For std::this_thread::sleep_until
 #include <vector>
 
-// Function declarations
-void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps, int captureDurationSec);
-HMONITOR MonitorFromIndex(int monitorIndex);
-BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData);
-
-// Function to capture each monitor and save as bitmap
-void CaptureAllMonitors(const char* baseFilename, int fps, int captureDurationSec) {
-    std::vector<HMONITOR> monitors;
-    EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&monitors));
-
-    for (size_t i = 0; i < monitors.size(); ++i) {
-        char filename[256];
-        sprintf_s(filename, "%s_%zu.bmp", baseFilename, i);
-
-        CaptureMonitor(filename, monitors[i], fps, captureDurationSec);
-    }
-}
-
-// Function to capture a specific monitor and save as bitmap for a specified duration
-void CaptureMonitor(const char* filename, HMONITOR hMonitor, int fps, int captureDurationSec) {
-    // Get monitor info
+void CaptureScreen(const std::string& outputFileName, HMONITOR hMonitor) {
+    // Get monitor information
     MONITORINFOEX monitorInfo;
     monitorInfo.cbSize = sizeof(MONITORINFOEX);
     GetMonitorInfo(hMonitor, &monitorInfo);
 
-    // Calculate capture dimensions
-    int captureWidth = monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
-    int captureHeight = monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top;
+    // Calculate width and height of the monitor
+    int width = monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
+    int height = monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top;
 
-    // Calculate time interval between frames
-    auto frameDuration = std::chrono::milliseconds(1000 / fps);
+    // Create a device context (DC) for the monitor
+    HDC hMonitorDC = CreateDC(TEXT("DISPLAY"), monitorInfo.szDevice, NULL, NULL);
 
-    // Calculate end time based on capture duration
-    auto endTime = std::chrono::steady_clock::now() + std::chrono::seconds(captureDurationSec);
+    // Create a compatible bitmap for the screenshot
+    HDC hMemoryDC = CreateCompatibleDC(hMonitorDC);
+    HBITMAP hBitmap = CreateCompatibleBitmap(hMonitorDC, width, height);
+    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemoryDC, hBitmap);
 
-    while (std::chrono::steady_clock::now() < endTime) {
-        auto startTime = std::chrono::steady_clock::now();
+    // Copy the screen into the bitmap
+    BitBlt(hMemoryDC, 0, 0, width, height, hMonitorDC, 0, 0, SRCCOPY);
 
-        HDC hMonitorDC = CreateDC(TEXT("DISPLAY"), monitorInfo.szDevice, NULL, NULL); // Get DC for monitor
-        HDC hMemoryDC = CreateCompatibleDC(hMonitorDC); // Create a compatible DC for bitmap
+    // Save the bitmap to a file (you can modify this part as needed)
+    BITMAPINFOHEADER bi;
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = width;
+    bi.biHeight = height;
+    bi.biPlanes = 1;
+    bi.biBitCount = 24;
+    bi.biCompression = BI_RGB;
+    bi.biSizeImage = 0;
+    bi.biXPelsPerMeter = 0;
+    bi.biYPelsPerMeter = 0;
+    bi.biClrUsed = 0;
+    bi.biClrImportant = 0;
 
-        // Create bitmap compatible with the monitor DC
-        HBITMAP hBitmap = CreateCompatibleBitmap(hMonitorDC, captureWidth, captureHeight);
-        HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemoryDC, hBitmap);
+    // Calculate the size of the bitmap
+    DWORD dwBmpSize = ((width * bi.biBitCount + 31) / 32) * 4 * height;
 
-        // Copy monitor to the compatible DC
-        BitBlt(hMemoryDC, 0, 0, captureWidth, captureHeight, hMonitorDC, 0, 0, SRCCOPY);
+    // Allocate enough memory for the bitmap data
+    HANDLE hDIB = GlobalAlloc(GHND, dwBmpSize);
+    char* lpbitmap = (char*)GlobalLock(hDIB);
 
-        // Clean up
-        SelectObject(hMemoryDC, hOldBitmap);
-        DeleteDC(hMemoryDC);
-        DeleteDC(hMonitorDC);
+    // Get the bitmap data
+    GetDIBits(hMemoryDC, hBitmap, 0, (UINT)height, lpbitmap, (BITMAPINFO*)&bi, DIB_RGB_COLORS);
 
-        // Save bitmap to file
-        BITMAPINFOHEADER bmiHeader;
-        memset(&bmiHeader, 0, sizeof(BITMAPINFOHEADER));
-        bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmiHeader.biWidth = captureWidth;
-        bmiHeader.biHeight = -captureHeight; // Negative height to ensure top-down bitmap
-        bmiHeader.biPlanes = 1;
-        bmiHeader.biBitCount = 24; // 24-bit bitmap
-        bmiHeader.biCompression = BI_RGB;
-        bmiHeader.biSizeImage = 0;
+    // Create and write the image file
+    std::ofstream of(outputFileName, std::ios::out | std::ios::binary);
+    BITMAPFILEHEADER bmfHeader;
+    bmfHeader.bfType = 0x4D42; // 'BM'
+    bmfHeader.bfSize = dwBmpSize + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    bmfHeader.bfReserved1 = 0;
+    bmfHeader.bfReserved2 = 0;
+    bmfHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
 
-        BITMAPFILEHEADER bmfHeader;
-        memset(&bmfHeader, 0, sizeof(BITMAPFILEHEADER));
-        bmfHeader.bfType = 0x4D42; // 'BM'
-        bmfHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-        bmfHeader.bfSize = bmfHeader.bfOffBits + (captureWidth * captureHeight * 3); // Total size of the file
+    of.write((char*)&bmfHeader, sizeof(BITMAPFILEHEADER));
+    of.write((char*)&bi, sizeof(BITMAPINFOHEADER));
+    of.write(lpbitmap, dwBmpSize);
 
-        std::ofstream file(filename, std::ios::out | std::ios::binary);
-        file.write(reinterpret_cast<const char*>(&bmfHeader), sizeof(BITMAPFILEHEADER));
-        file.write(reinterpret_cast<const char*>(&bmiHeader), sizeof(BITMAPINFOHEADER));
+    // Clean up resources
+    GlobalUnlock(hDIB);
+    GlobalFree(hDIB);
+    of.close();
 
-        // Get bitmap data
-        char* lpPixels = new char[captureWidth * captureHeight * 3];
-        GetDIBits(hMonitorDC, hBitmap, 0, captureHeight, lpPixels, (BITMAPINFO*)&bmiHeader, DIB_RGB_COLORS);
-
-        // Write bitmap data to file
-        file.write(lpPixels, captureWidth * captureHeight * 3);
-
-        // Clean up
-        delete[] lpPixels;
-        file.close();
-        DeleteObject(hBitmap);
-
-        // Calculate time for next frame
-        auto elapsedTime = std::chrono::steady_clock::now() - startTime;
-        auto sleepTime = frameDuration - std::chrono::duration_cast<std::chrono::milliseconds>(elapsedTime);
-
-        if (sleepTime > std::chrono::milliseconds(0)) {
-            std::this_thread::sleep_for(sleepTime);
-        }
-    }
+    // Clean up GDI objects
+    SelectObject(hMemoryDC, hOldBitmap);
+    DeleteObject(hBitmap);
+    DeleteDC(hMemoryDC);
+    DeleteDC(hMonitorDC);
 }
 
-// Helper function to get monitor handle from index
-HMONITOR MonitorFromIndex(int monitorIndex) {
-    std::vector<HMONITOR> monitors;
-    EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&monitors));
-
-    if (monitorIndex < 0 || monitorIndex >= static_cast<int>(monitors.size())) {
-        return NULL;
-    }
-
-    return monitors[monitorIndex];
-}
-
-// Callback function for EnumDisplayMonitors
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-    std::vector<HMONITOR>* monitors = reinterpret_cast<std::vector<HMONITOR>*>(dwData);
-    monitors->push_back(hMonitor);
+    std::vector<std::string>* filenames = reinterpret_cast<std::vector<std::string>*>(dwData);
+
+    // Generate a unique filename for each monitor
+    char filename[MAX_PATH];
+    sprintf_s(filename, "screenshot_%p.bmp", hMonitor); // Use hMonitor as part of the filename
+
+    // Capture screen for this monitor
+    CaptureScreen(filename, hMonitor);
+
+    // Store the filename for further use
+    filenames->push_back(filename);
+
     return TRUE;
 }
 
 int main() {
-    // Capture all monitors for 10 seconds at 60 fps
-    int captureDurationSec = 10;
-    CaptureAllMonitors("monitor_capture", 60, captureDurationSec);
+    std::vector<std::string> capturedFiles;
+
+    // Enumerate all monitors and capture screens
+    EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&capturedFiles));
+
+    // Output the filenames of captured screenshots
+    std::cout << "Screenshots captured:" << std::endl;
+    for (const auto& file : capturedFiles) {
+        std::cout << file << std::endl;
+    }
+
     return 0;
 }
